@@ -1,5 +1,7 @@
 # report-collector
 
+**English** | [中文](README.zh-CN.md)
+
 A small, registry-driven Python framework for collecting publicly available reports
 (economic outlooks, market reports, surveys) into a month-by-month archive, with a manifest
 that records the status of every expected issue.
