@@ -9,13 +9,13 @@ description = "Registry-driven collector for publicly available reports, with a 
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"
-dependencies = [
-    "requests>=2.31",
-    "fpdf2>=2.7",
-]
+# No dependencies, on purpose. This has to run on machines where installing a package is a
+# negotiation, so everything - HTTP, robots.txt, HTML parsing, text extraction - is standard
+# library only.
+dependencies = []
 
-[project.optional-dependencies]
-truststore = ["truststore>=0.9"]
+[project.scripts]
+report-collector = "report_collector.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
