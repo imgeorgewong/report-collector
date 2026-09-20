@@ -1,0 +1,36 @@
+# --- Never commit data or office files (they hide connection strings, caches, author metadata) ---
+*.xlsx
+*.xlsm
+*.xlsb
+*.xls
+*.pbix
+*.ods
+*.csv
+*.pdf
+~$*
+
+# --- Local secrets / config ---
+.env
+*.secret
+secrets.*
+local_config.*
+
+# --- OS / editor ---
+.DS_Store
+.idea/
+.vscode/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+build/
+dist/
+
+# --- Collector output (downloaded reports are the publishers' copyright) ---
+archive/
+output/
+*_manifest.csv
