@@ -15,6 +15,8 @@ What this layer does and why:
 """
 from __future__ import annotations
 
+import socket
+import ssl
 import time
 import urllib.error
 import urllib.parse
@@ -98,6 +100,18 @@ class Fetcher:
                     break
             except Exception as exc:  # timeout, DNS, TLS
                 status, error = 0, f"{type(exc).__name__}: {exc}"
+                if _permanent(exc):
+                    # A name that does not resolve, or a certificate that does not verify,
+                    # will not resolve or verify five seconds later. Retrying these only
+                    # makes a broken registry slow to tell you it is broken.
+                    break
             if attempt < self.attempts:
                 time.sleep(self.backoff[min(attempt, len(self.backoff)) - 1])
         return FetchResult(url=url, final_url=url, status=status, error=error)
+
+
+def _permanent(exc: Exception) -> bool:
+    """True for failures that a retry cannot fix."""
+    reason = getattr(exc, "reason", None)
+    return isinstance(exc, (socket.gaierror, ssl.SSLCertVerificationError)) or isinstance(
+        reason, (socket.gaierror, ssl.SSLCertVerificationError))

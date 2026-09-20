@@ -32,6 +32,20 @@ git config core.hooksPath .githooks
 
 需要 Python 3.10 以上。没有任何依赖要装。
 
+包放在 `src/` 下，所以要么临时加进导入路径：
+
+```
+PYTHONPATH=src python -m report_collector check --registry examples/registry_example.py
+```
+
+要么装一次（同时会得到 `report-collector` 这个命令）：
+
+```
+pip install -e .
+```
+
+下面的例子默认你已经做了其中一种。
+
 ## 使用
 
 ```
@@ -69,6 +83,9 @@ Source(
     extensions=(".pdf",),
     edition_tokens=("{year}",),       # 防止常青 URL 一直发去年那版
     year_window=1,                    # 落地页上的链接最多往回取几年
+    # 当找到的链接是文章页而不是文件本身：
+    url_rewrite=(r"/html/(\w+)\.html", r"/pdf/\1.pdf"),   # 从页面地址推出文件地址，或者
+    detail_page=True,                 # 打开这个页面，在上面找文件
 )
 ```
 

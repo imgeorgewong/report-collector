@@ -142,3 +142,74 @@ class Validation(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+ARTICLE_PAGE = ('<a href="/press/eb/html/eb202605.en.html">6 August 2026 Bulletin Issue 5, 2026</a>')
+
+
+def bulletin_source(**kwargs):
+    base = dict(key="eb", name="Bulletin", publisher="Bank", tier=Tier.SCRAPE,
+                cadence=Cadence.WINDOW, landing_url=LANDING,
+                allowed_hosts=("acme.example",), extensions=(".pdf",),
+                link_patterns=(r"/press/eb/html/eb\d{6}\.en\.html",))
+    base.update(kwargs)
+    return Source(**base)
+
+
+class LinkIsNotTheFile(unittest.TestCase):
+    """The listing links to an article page; the PDF address is derived or found on it."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_url_rewrite_reaches_the_pdf_without_an_extra_request(self):
+        source = bulletin_source(
+            url_rewrite=(r"/press/eb/html/(eb\d{6})\.en\.html", r"/pub/pdf/\1.en.pdf"))
+        fetcher = FakeFetcher({
+            LANDING: (ARTICLE_PAGE.encode(), "text/html", None),
+            "https://acme.example/pub/pdf/eb202605.en.pdf": (PDF_BYTES, "application/pdf", None),
+        })
+        summary = run([source], self.root, 2026, fetcher=fetcher)
+        self.assertEqual(summary.records[0].status, Status.DOWNLOADED)
+        self.assertEqual(summary.records[0].issue.month, 8)   # month comes from the link text
+        self.assertNotIn("https://acme.example/press/eb/html/eb202605.en.html", fetcher.calls)
+
+    def test_detail_page_is_opened_when_the_address_cannot_be_derived(self):
+        source = bulletin_source(detail_page=True)
+        detail = '<a href="/files/bulletin-5.pdf">Download the issue (PDF)</a>'
+        fetcher = FakeFetcher({
+            LANDING: (ARTICLE_PAGE.encode(), "text/html", None),
+            "https://acme.example/press/eb/html/eb202605.en.html": (detail.encode(), "text/html", None),
+            "https://acme.example/files/bulletin-5.pdf": (PDF_BYTES, "application/pdf", None),
+        })
+        summary = run([source], self.root, 2026, fetcher=fetcher)
+        self.assertEqual(summary.records[0].status, Status.DOWNLOADED)
+
+
+class SourceNeverDisappearsSilently(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_a_window_source_with_no_matching_links_still_reports_a_row(self):
+        source = bulletin_source(link_patterns=(r"never-matches",))
+        fetcher = FakeFetcher({LANDING: (ARTICLE_PAGE.encode(), "text/html", None)})
+        summary = run([source], self.root, 2026, fetcher=fetcher)
+        self.assertEqual(len(summary.records), 1)
+        self.assertEqual(summary.records[0].status, Status.ABSENT)
+        self.assertIn("named a month", summary.records[0].note)
+
+    def test_a_landing_page_that_fails_says_so(self):
+        source = bulletin_source()
+        fetcher = FakeFetcher({})    # the landing page itself 404s
+        summary = run([source], self.root, 2026, fetcher=fetcher)
+        self.assertEqual(len(summary.records), 1)
+        self.assertIn("landing page", summary.records[0].note)
+        self.assertIn("failed", summary.records[0].note)

@@ -61,6 +61,11 @@ class Source:
     extensions: tuple[str, ...] = (".pdf",)
     extra_urls: tuple[str, ...] = ()      # URLs a person pasted in, for sources whose links
                                           # cannot be discovered (e.g. revealed after a form)
+    url_rewrite: tuple[str, str] = ()     # (regex, replacement): the link found is not the
+                                          # file, but the file's address can be derived from
+                                          # it, e.g. an article page -> its PDF
+    detail_page: bool = False             # the link found is an article page: open it and
+                                          # look for the document on that page
     edition_tokens: tuple[str, ...] = ()  # text that must appear for the issue to be the right
                                           # edition; "{year}" is substituted per issue
     year_window: int = 1           # how many years back a landing page's links may go
@@ -87,6 +92,11 @@ class Source:
             problems.append(f"{self.key}: cadence {self.cadence.value} needs months")
         if any(not (1 <= m <= 12) for m in self.months):
             problems.append(f"{self.key}: months out of range: {self.months}")
+        if self.url_rewrite and len(self.url_rewrite) != 2:
+            problems.append(f"{self.key}: url_rewrite must be (regex, replacement)")
+        if (self.url_rewrite or self.detail_page) and self.tier is not Tier.SCRAPE:
+            problems.append(
+                f"{self.key}: url_rewrite / detail_page only apply to tier SCRAPE")
         return problems
 
 

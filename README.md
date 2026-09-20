@@ -38,6 +38,20 @@ git config core.hooksPath .githooks
 
 Python 3.10 or later. No dependencies to install.
 
+The package lives under `src/`, so either put it on the path for one command:
+
+```
+PYTHONPATH=src python -m report_collector check --registry examples/registry_example.py
+```
+
+or install it once, which also gives you a `report-collector` command:
+
+```
+pip install -e .
+```
+
+The examples below assume one of those.
+
 ## Use
 
 ```
@@ -77,6 +91,9 @@ Source(
     extensions=(".pdf",),
     edition_tokens=("{year}",),       # guards against an evergreen URL serving last year
     year_window=1,                    # how far back a landing page's links may go
+    # when the link found is an article page rather than the file:
+    url_rewrite=(r"/html/(\w+)\.html", r"/pdf/\1.pdf"),   # derive the file address, or
+    detail_page=True,                 # open the page and look for the document on it
 )
 ```
 

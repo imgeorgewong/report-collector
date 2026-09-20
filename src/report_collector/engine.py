@@ -10,14 +10,15 @@ matching something volatile, and the collector would re-download for ever.
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from .archive import (canonical_names, claimed_file, filename_for, month_dir,
                       write_atomic)
 from .discover import candidates_for_issue, find_links, window_candidates
 from .extract import decode, fingerprint_text, html_to_text
-from .guards import (duplicate_of, edition_matches, looks_like_document,
-                     redirected_away, sha256)
+from .guards import (duplicate_of, edition_matches, host_allowed,
+                     looks_like_document, redirected_away, sha256)
 from .http import Fetcher
 from .manifest import expected_issues, today_iso, write_manifest
 from .models import Cadence, FetchResult, Issue, Record, RunSummary, Source, Status, Tier
@@ -29,18 +30,32 @@ def _template_url(source: Source, issue: Issue) -> str:
                                       quarter=(issue.month - 1) // 3 + 1)
 
 
-def _landing_links(source: Source, fetcher: Fetcher, cache: dict[str, list]) -> list:
+def _landing_links(source: Source, fetcher: Fetcher,
+                   cache: dict[str, tuple[list, str]]) -> tuple[list, str]:
+    """Links on the source's landing page, plus any hand-supplied extra_urls.
+
+    Returns (links, problem). A landing page that fails to load is the single most damaging
+    silent failure available here: every issue of the source then matches nothing, and the
+    run reports an archive with a source quietly missing from it. So the reason travels with
+    the result instead of being swallowed.
+    """
     if source.key in cache:
         return cache[source.key]
     links: list = []
+    problem = ""
     if source.landing_url:
         result = fetcher.get(source.landing_url, accept="text/html")
         if result.ok:
             html = decode(result.body, result.content_type)
             links = find_links(html, result.final_url)
+            if not links:
+                problem = f"landing page {source.landing_url} has no links (JavaScript shell?)"
+        else:
+            problem = (f"landing page {source.landing_url} failed: "
+                       f"{result.error or 'HTTP ' + str(result.status)}")
     links.extend((url, "") for url in source.extra_urls)
-    cache[source.key] = links
-    return links
+    cache[source.key] = (links, problem)
+    return links, problem
 
 
 def _store(root: Path, source: Source, issue: Issue, result: FetchResult,
@@ -81,8 +96,37 @@ def _write(root: Path, source: Source, issue: Issue, result: FetchResult,
                   sha256=digest, checked_at=today_iso())
 
 
+def _rewritten(source: Source, url: str) -> str:
+    """Apply the source's url_rewrite, if it changes anything."""
+    if not source.url_rewrite:
+        return ""
+    pattern, replacement = source.url_rewrite
+    out = re.sub(pattern, replacement, url)
+    return out if out != url else ""
+
+
+def _detail_page_documents(source: Source, url: str, fetcher: Fetcher) -> list[str]:
+    """Open an article page and return the document links on it, best first.
+
+    The commonest shape in the wild: the listing links to a page about the report, and the
+    PDF is a button on that page. One extra request per issue buys a registry that does not
+    have to encode the publisher's file-naming scheme.
+    """
+    result = fetcher.get(url, accept="text/html")
+    if not result.ok:
+        return []
+    html = decode(result.body, result.content_type)
+    found = []
+    for href, text in find_links(html, result.final_url):
+        if not host_allowed(href, source):
+            continue
+        if any(href.lower().split("?")[0].endswith(ext.lower()) for ext in source.extensions):
+            found.append(href)
+    return found
+
+
 def _collect_issue(source: Source, issue: Issue, root: Path, fetcher: Fetcher,
-                   cache: dict[str, list], seen: dict[str, str]) -> Record:
+                   cache: dict[str, tuple[list, str]], seen: dict[str, str]) -> Record:
     now = today_iso()
 
     if issue.is_future:
@@ -106,15 +150,25 @@ def _collect_issue(source: Source, issue: Issue, root: Path, fetcher: Fetcher,
     if source.tier is Tier.TEMPLATE:
         urls = [_template_url(source, issue)]
     else:
-        urls = candidates_for_issue(source, _landing_links(source, fetcher, cache),
-                                    issue.year, issue.month)
-        if not urls:
+        links, problem = _landing_links(source, fetcher, cache)
+        found = candidates_for_issue(source, links, issue.year, issue.month)
+        if not found:
             return Record(issue, source, Status.ABSENT, checked_at=now,
-                          note="no link on the landing page matched - not published, rolled "
-                               "off the list, or the pattern is wrong")
+                          note=problem or "no link on the landing page matched - not "
+                               "published, rolled off the list, or the pattern is wrong")
+        # For each candidate: the rewritten address first (no extra request), then the link
+        # itself, then - if declared - whatever the article page points at.
+        urls = []
+        for candidate in found[:3]:
+            rewritten = _rewritten(source, candidate)
+            if rewritten:
+                urls.append(rewritten)
+            urls.append(candidate)
+            if source.detail_page:
+                urls.extend(_detail_page_documents(source, candidate, fetcher)[:2])
 
     last_note = ""
-    for url in urls[:3]:
+    for url in urls[:6]:
         result = fetcher.get(url, accept="application/pdf,text/html")
         if not result.ok:
             last_note = result.error or f"HTTP {result.status}"
@@ -162,16 +216,28 @@ def run(sources: list[Source], root: Path, year: int,
 
     for source in sources:
         issues = expected_issues(source, year)
+        before = len(summary.records)
+
         if source.cadence is Cadence.WINDOW:
             # No expected months. Sweep what the landing page offers and file each link under
             # the month it names; a month with nothing simply has no row.
-            links = _landing_links(source, fetcher, cache)
-            for month in sorted({month for _, month in window_candidates(source, links, year)}):
+            links, problem = _landing_links(source, fetcher, cache)
+            months = sorted({month for _, month in window_candidates(source, links, year)})
+            for month in months:
                 issue = Issue(source.key, year, month)
                 if issue.is_future:
                     continue
                 summary.records.append(_collect_issue(source, issue, root, fetcher, cache, seen))
+            if len(summary.records) == before:
+                # A source that produces no rows at all would otherwise vanish from the run
+                # silently - the counts still add up, and nobody notices it stopped.
+                summary.records.append(Record(
+                    Issue(source.key, year, 1), source, Status.ABSENT,
+                    note=problem or (f"no issue link on {source.landing_url} named a month in "
+                                     f"{year} - check link_patterns and the page itself"),
+                    checked_at=today_iso()))
             continue
+
         for issue in issues:
             summary.records.append(_collect_issue(source, issue, root, fetcher, cache, seen))
 
